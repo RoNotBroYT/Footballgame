@@ -82,21 +82,23 @@ let ball, shooting = false, shotCount = 0, goals = 0, resultMsg = "";
 let keeper, keeperMoveDir = 0, keeperAnim = 0, keeperSave = false, gameActive = true;
 let aiming = false, aimAngle = 0, aimPower = 0.6, aimTarget = {x:0,y:0}, aimSet = false;
 let animFrame;
+let chargingPower = false, chargeStart = 0, chargeTime = 0, maxCharge = 2.0, shotPower = 0.6, overBar = false;
+let lastAimX = 0, lastAimY = 0;
 
 function resize() {
   W = window.innerWidth;
   H = window.innerHeight;
   canvas.width = W;
   canvas.height = H;
-  FIELD_W = Math.min(W*0.7, H*0.75, 750);
-  FIELD_H = FIELD_W * 1.2;
+  FIELD_W = Math.min(W*0.7, H*0.82, 950);
+  FIELD_H = FIELD_W * 1.15;
   FIELD_X = (W - FIELD_W) / 2;
   FIELD_Y = (H - FIELD_H) / 2;
-  GOAL_W = FIELD_W * 0.6;
-  GOAL_H = FIELD_H * 0.08;
+  GOAL_W = FIELD_W * 0.82;
+  GOAL_H = FIELD_H * 0.14;
   GOAL_X = FIELD_X + (FIELD_W - GOAL_W) / 2;
-  GOAL_Y = FIELD_Y + 48;
-  BOX_W = FIELD_W * 0.85;
+  GOAL_Y = FIELD_Y + 36;
+  BOX_W = FIELD_W * 0.92;
   BOX_H = FIELD_H * 0.33;
   BOX_X = FIELD_X + (FIELD_W - BOX_W) / 2;
   BOX_Y = GOAL_Y;
@@ -116,6 +118,8 @@ function resetGame(keepScore=false) {
     y: PEN_SPOT_Y,
     vx: 0,
     vy: 0,
+    vz: 0,
+    z: 0,
     speed: 0,
     moving: false,
     scored: false
@@ -129,15 +133,20 @@ function resetGame(keepScore=false) {
   keeper = {
     x: FIELD_X + FIELD_W/2,
     y: GOAL_Y + GOAL_H + BALL_RADIUS*1.1,
-    w: GOAL_W/5,
+    w: GOAL_W/7,
     h: BALL_RADIUS*2.1,
-    moveX: 0,
-    saveX: 0
+    leftLimit: GOAL_X + BALL_RADIUS*1.2 + GOAL_W*0.04,
+    rightLimit: GOAL_X + GOAL_W - BALL_RADIUS*1.2 - GOAL_W*0.04
   };
   keeperAnim = 0;
   keeperMoveDir = 0;
   keeperSave = false;
   gameActive = true;
+  chargingPower = false;
+  chargeStart = 0;
+  chargeTime = 0;
+  shotPower = 0.6;
+  overBar = false;
   updateScore();
   cancelAnimationFrame(animFrame);
   draw();
@@ -184,7 +193,7 @@ function drawField() {
   ctx.restore();
   ctx.save();
   ctx.strokeStyle="#fff";
-  ctx.lineWidth=12;
+  ctx.lineWidth=14;
   ctx.lineCap="round";
   ctx.beginPath();
   ctx.moveTo(GOAL_X, GOAL_Y+GOAL_H);
@@ -200,11 +209,11 @@ function drawKeeper() {
   ctx.translate(keeper.x, keeper.y);
   ctx.save();
   ctx.strokeStyle = "#0ff";
-  ctx.lineWidth = BALL_RADIUS*0.6;
+  ctx.lineWidth = BALL_RADIUS*0.7;
   ctx.lineCap = "round";
   ctx.beginPath();
-  ctx.moveTo(-keeper.w*0.7, 0);
-  ctx.lineTo(keeper.w*0.7, 0);
+  ctx.moveTo(-keeper.w*0.9, 0);
+  ctx.lineTo(keeper.w*0.9, 0);
   ctx.stroke();
   ctx.restore();
   ctx.beginPath();
@@ -212,7 +221,7 @@ function drawKeeper() {
   ctx.fillStyle = "#fff";
   ctx.fill();
   ctx.beginPath();
-  ctx.arc(0, -keeper.h*0.83, keeper.h*0.5, 0, Math.PI*2);
+  ctx.arc(0, -keeper.h*0.83, keeper.h*0.55, 0, Math.PI*2);
   ctx.fillStyle = "#0ff";
   ctx.fill();
   ctx.restore();
@@ -221,7 +230,7 @@ function drawKeeper() {
 function drawBall() {
   ctx.save();
   ctx.beginPath();
-  ctx.arc(ball.x, ball.y, BALL_RADIUS, 0, Math.PI*2);
+  ctx.arc(ball.x, ball.y - ball.z, BALL_RADIUS, 0, Math.PI*2);
   ctx.fillStyle = "#fff";
   ctx.shadowColor = "#0ff";
   ctx.shadowBlur = 12;
@@ -250,6 +259,21 @@ function drawAim() {
   ctx.lineWidth = 3;
   ctx.stroke();
   ctx.restore();
+  if (chargingPower) {
+    let pct = Math.min(chargeTime/maxCharge, 1);
+    ctx.save();
+    ctx.fillStyle = pct < 1 ? "#0ff" : "#f55";
+    ctx.globalAlpha = 0.6;
+    ctx.fillRect(ball.x-BALL_RADIUS*2, ball.y+BALL_RADIUS*2, BALL_RADIUS*4 * pct, BALL_RADIUS*0.7);
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle="#fff";
+    ctx.lineWidth=2;
+    ctx.strokeRect(ball.x-BALL_RADIUS*2, ball.y+BALL_RADIUS*2, BALL_RADIUS*4, BALL_RADIUS*0.7);
+    ctx.font = `bold ${BALL_RADIUS*1.2}px monospace`;
+    ctx.fillStyle = pct < 1 ? "#0ff" : "#f55";
+    ctx.fillText(pct < 1 ? "POWER" : "OVER!", ball.x, ball.y+BALL_RADIUS*4.5);
+    ctx.restore();
+  }
 }
 
 function drawMsg() {
@@ -275,7 +299,7 @@ function draw() {
   animFrame = requestAnimationFrame(draw);
 }
 
-function shootBall(targetX, targetY) {
+function shootBall(targetX, targetY, finalPower, overBarNow) {
   if (!gameActive || shooting) return;
   shooting = true;
   aimSet = true;
@@ -284,11 +308,17 @@ function shootBall(targetX, targetY) {
   let dx = targetX - ball.x;
   let dy = targetY - ball.y;
   let dist = Math.sqrt(dx*dx + dy*dy);
-  let speed = Math.max(FIELD_H*0.023, Math.min(FIELD_H*0.034, dist*0.07));
+  let baseSpeed = Math.max(FIELD_H*0.023, Math.min(FIELD_H*0.034, dist*0.07));
+  let power = Math.max(0.5, Math.min(finalPower, 1.35));
+  let speed = baseSpeed * power * (overBarNow ? 1.25 : 1);
   ball.vx = dx/dist * speed;
   ball.vy = dy/dist * speed;
-  ball.speed = speed;
+  shotPower = power;
   shotCount++;
+  ball.z = 0;
+  overBar = overBarNow;
+  ball.vz = overBarNow ? FIELD_H*0.052 : (power > 1.18 ? FIELD_H*0.034 + (power-1.18)*FIELD_H*0.022 : FIELD_H*0.016 + power*FIELD_H*0.018);
+  ball.speed = speed;
   updateScore();
   keeperMoveDir = Math.random() < 0.34 ? -1 : (Math.random() > 0.67 ? 1 : 0);
   keeperSave = false;
@@ -298,6 +328,7 @@ function update() {
   if (shooting) {
     keeperAnim++;
     let saveTarget = keeper.x + keeperMoveDir * (GOAL_W/2 - keeper.w/1.6);
+    saveTarget = Math.max(keeper.leftLimit, Math.min(keeper.rightLimit, saveTarget));
     if (Math.abs(saveTarget - keeper.x) > 2) {
       keeper.x += (saveTarget - keeper.x) * 0.19;
     }
@@ -305,11 +336,15 @@ function update() {
   if (ball.moving) {
     ball.x += ball.vx;
     ball.y += ball.vy;
-    if (!keeperSave && 
-        ball.y < keeper.y + keeper.h*0.8 &&
-        ball.y > keeper.y - keeper.h*0.8 &&
+    ball.z += ball.vz;
+    ball.vz -= FIELD_H*0.00148;
+    if (ball.z < 0) ball.z = 0;
+    if (!keeperSave && !overBar &&
+        ball.y - ball.z < keeper.y + keeper.h*0.8 &&
+        ball.y - ball.z > keeper.y - keeper.h*0.8 &&
         Math.abs(ball.x - keeper.x) < keeper.w*0.52 + BALL_RADIUS &&
-        ball.y < GOAL_Y + GOAL_H + BALL_RADIUS*1.1) {
+        ball.y - ball.z < GOAL_Y + GOAL_H + BALL_RADIUS*1.1 &&
+        ball.z < BALL_RADIUS*1.2) {
       ball.moving = false;
       resultMsg = "SAVED!";
       keeperSave = true;
@@ -318,9 +353,12 @@ function update() {
       return;
     }
     if (
-      ball.y < GOAL_Y + GOAL_H + BALL_RADIUS*1.2 &&
-      ball.x > GOAL_X + BALL_RADIUS*0.6 && ball.x < GOAL_X+GOAL_W - BALL_RADIUS*0.6 &&
-      ball.y > GOAL_Y - BALL_RADIUS*2
+      ball.y - ball.z < GOAL_Y + GOAL_H + BALL_RADIUS*1.2 &&
+      ball.x > GOAL_X + BALL_RADIUS*0.7 &&
+      ball.x < GOAL_X+GOAL_W - BALL_RADIUS*0.7 &&
+      ball.y - ball.z > GOAL_Y - BALL_RADIUS*2 &&
+      ball.z < GOAL_H*0.72 &&
+      !overBar
     ) {
       ball.moving = false;
       resultMsg = "GOAL!";
@@ -330,7 +368,19 @@ function update() {
       setTimeout(() => {resultMsg="";resetGame(true);}, 1350);
       return;
     }
-    if (ball.x < FIELD_X - 12 || ball.x > FIELD_X+FIELD_W+12 || ball.y < FIELD_Y - 12) {
+    if (
+      ball.y - ball.z < GOAL_Y + BALL_RADIUS*1.5 &&
+      ball.x > GOAL_X + BALL_RADIUS*0.7 &&
+      ball.x < GOAL_X+GOAL_W - BALL_RADIUS*0.7 &&
+      ball.z > GOAL_H*0.7
+    ) {
+      ball.moving = false;
+      resultMsg = "OVER THE BAR!";
+      shooting = false;
+      setTimeout(() => {resultMsg="";resetGame(true);}, 1350);
+      return;
+    }
+    if (ball.x < FIELD_X - 12 || ball.x > FIELD_X+FIELD_W+12 || ball.y - ball.z < FIELD_Y - 12) {
       ball.moving = false;
       resultMsg = "MISSED!";
       shooting = false;
@@ -353,40 +403,61 @@ canvas.addEventListener("mousemove", function(e){
     let aimDist = Math.sqrt(dx*dx + (aimY-ball.y)*(aimY-ball.y));
     aimPower = Math.max(0.46, Math.min(aimDist/(FIELD_H*0.42), 1));
     aimTarget = {x: ball.x + Math.cos(aimAngle)*FIELD_H*0.42*aimPower, y: ball.y + Math.sin(aimAngle)*FIELD_H*0.42*aimPower};
+    lastAimX = aimTarget.x;
+    lastAimY = aimTarget.y;
   }
 });
 
-canvas.addEventListener("mousedown", function(e){
+function startCharge(e) {
   if (shooting || !gameActive) return;
-  aimSet = true;
-  shooting = false;
-  shootBall(aimTarget.x, aimTarget.y);
-});
+  if (!chargingPower) {
+    chargingPower = true;
+    chargeStart = performance.now();
+    chargeTime = 0;
+  }
+}
 
+function endCharge(e) {
+  if (shooting || !gameActive || !chargingPower) return;
+  chargingPower = false;
+  chargeTime = (performance.now() - chargeStart) / 1000;
+  let capped = Math.min(chargeTime, maxCharge);
+  let isOver = capped > 1.5;
+  let finalPower = 0.6 + capped * 0.58;
+  shootBall(lastAimX || aimTarget.x, lastAimY || aimTarget.y, finalPower, isOver);
+}
+
+canvas.addEventListener("mousedown", startCharge);
+canvas.addEventListener("mouseup", endCharge);
+canvas.addEventListener("mouseleave", e => { if (chargingPower) endCharge(); });
+
+window.addEventListener("keydown", function(e){
+  if (e.code === "Space") startCharge();
+});
+window.addEventListener("keyup", function(e){
+  if (e.code === "Space") endCharge();
+});
 canvas.addEventListener("touchstart", function(e){
-  if (shooting || !gameActive) return;
-  let touch = e.touches[0];
-  let rect = canvas.getBoundingClientRect();
-  let mx = touch.clientX - rect.left, my = touch.clientY - rect.top;
-  let dx = mx - ball.x, dy = my - ball.y;
-  if (dy < 0) {
-    aimAngle = Math.atan2(dy, dx);
-    let minY = GOAL_Y + GOAL_H*0.7;
-    let maxY = ball.y - BALL_RADIUS*2;
-    let aimY = Math.max(minY, Math.min(my, maxY));
-    let aimDist = Math.sqrt(dx*dx + (aimY-ball.y)*(aimY-ball.y));
-    aimPower = Math.max(0.46, Math.min(aimDist/(FIELD_H*0.42), 1));
-    aimTarget = {x: ball.x + Math.cos(aimAngle)*FIELD_H*0.42*aimPower, y: ball.y + Math.sin(aimAngle)*FIELD_H*0.42*aimPower};
-    aimSet = true;
-    shooting = false;
-    shootBall(aimTarget.x, aimTarget.y);
-  }
-});
+  startCharge();
+  e.preventDefault();
+  return false;
+},{passive:false});
+canvas.addEventListener("touchend", function(e){
+  endCharge();
+  e.preventDefault();
+  return false;
+},{passive:false});
 
 document.getElementById('restartBtn').onclick = ()=>resetGame(false);
 
-resize();
+(function animatePowerBar(){
+  if (chargingPower) {
+    chargeTime = (performance.now() - chargeStart) / 1000;
+  }
+  requestAnimationFrame(animatePowerBar);
+})();
 
+resize();
   </script>
 </body>
 </html>
