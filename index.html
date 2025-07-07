@@ -5,14 +5,7 @@
   <title>Fun Football Game</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <style>
-    html, body {
-      width: 100vw;
-      height: 100vh;
-      margin: 0;
-      padding: 0;
-      overflow: hidden;
-      background: #000;
-    }
+    html, body { width:100vw; height:100vh; margin:0; padding:0; overflow:hidden; background: #000; }
     body { position: relative; }
     canvas {
       display: block;
@@ -61,17 +54,34 @@
       letter-spacing: 1px;
       text-shadow: 0 0 18px #0ff9;
     }
+    #curveTip {
+      position: absolute;
+      left: 50%;
+      top: 60px;
+      transform: translateX(-50%);
+      color: #fff;
+      font-family: monospace;
+      background: #222d;
+      padding: 4px 16px;
+      border-radius: 10px;
+      border: 2px solid #0ff;
+      font-size: 1.05em;
+      z-index: 3;
+      letter-spacing: 0.08em;
+    }
   </style>
 </head>
 <body>
   <h2>Fun Football Game</h2>
   <div id="scoreInfo">Goals: 0 &nbsp; | &nbsp; Shots: 0</div>
   <button id="restartBtn" onclick="resetGame()">Restart</button>
+  <div id="curveTip" style="display:none">Hold <b>C</b> after aiming to choose curve, then shoot!</div>
   <canvas id="game"></canvas>
   <script>
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
 const scoreInfo = document.getElementById("scoreInfo");
+const curveTip = document.getElementById("curveTip");
 
 let W = window.innerWidth;
 let H = window.innerHeight;
@@ -84,6 +94,9 @@ let aiming = false, aimAngle = 0, aimPower = 0.6, aimTarget = {x:0,y:0}, aimSet 
 let animFrame;
 let chargingPower = false, chargeStart = 0, chargeTime = 0, maxCharge = 2.0, shotPower = 0.6, overBar = false;
 let lastAimX = 0, lastAimY = 0;
+let curveMode = false, curveSet = false, curveDir = 0, curveStrength = 0, choosingCurve = false;
+let curveStart = 0, curveCharge = 0;
+let canChooseCurve = false, curveWasUsedThisShot = false;
 
 function resize() {
   W = window.innerWidth;
@@ -122,7 +135,10 @@ function resetGame(keepScore=false) {
     z: 0,
     speed: 0,
     moving: false,
-    scored: false
+    scored: false,
+    curve: 0,
+    curveDir: 0,
+    curveUsed: false
   };
   shooting = false;
   aiming = false;
@@ -136,7 +152,8 @@ function resetGame(keepScore=false) {
     w: GOAL_W/7,
     h: BALL_RADIUS*2.1,
     leftLimit: GOAL_X + BALL_RADIUS*1.2 + GOAL_W*0.04,
-    rightLimit: GOAL_X + GOAL_W - BALL_RADIUS*1.2 - GOAL_W*0.04
+    rightLimit: GOAL_X + GOAL_W - BALL_RADIUS*1.2 - GOAL_W*0.04,
+    react: 0
   };
   keeperAnim = 0;
   keeperMoveDir = 0;
@@ -147,6 +164,16 @@ function resetGame(keepScore=false) {
   chargeTime = 0;
   shotPower = 0.6;
   overBar = false;
+  curveMode = false;
+  curveSet = false;
+  curveDir = 0;
+  curveStrength = 0;
+  choosingCurve = false;
+  curveStart = 0;
+  curveCharge = 0;
+  canChooseCurve = false;
+  curveWasUsedThisShot = false;
+  curveTip.style.display = "none";
   updateScore();
   cancelAnimationFrame(animFrame);
   draw();
@@ -274,6 +301,22 @@ function drawAim() {
     ctx.fillText(pct < 1 ? "POWER" : "OVER!", ball.x, ball.y+BALL_RADIUS*4.5);
     ctx.restore();
   }
+  if (choosingCurve) {
+    let pct = Math.min(curveCharge/1.1, 1);
+    ctx.save();
+    ctx.globalAlpha = 0.65;
+    ctx.fillStyle = curveDir === 0 ? "#888" : (curveDir > 0 ? "#0ff" : "#0ff");
+    ctx.fillRect(ball.x - BALL_RADIUS*2, ball.y+BALL_RADIUS*7.2, BALL_RADIUS*4 * pct, BALL_RADIUS*0.7);
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = "#fff";
+    ctx.lineWidth=2;
+    ctx.strokeRect(ball.x-BALL_RADIUS*2, ball.y+BALL_RADIUS*7.2, BALL_RADIUS*4, BALL_RADIUS*0.7);
+    ctx.font = `bold ${BALL_RADIUS*1.08}px monospace`;
+    ctx.fillStyle = "#0ff";
+    if (curveDir === 0) ctx.fillStyle = "#888";
+    ctx.fillText(curveDir === 0 ? "NO CURVE" : (curveDir > 0 ? "CURVE →" : "CURVE ←"), ball.x, ball.y+BALL_RADIUS*9.5);
+    ctx.restore();
+  }
 }
 
 function drawMsg() {
@@ -317,23 +360,52 @@ function shootBall(targetX, targetY, finalPower, overBarNow) {
   shotCount++;
   ball.z = 0;
   overBar = overBarNow;
+  if (curveSet && curveStrength > 0 && curveDir !== 0) {
+    ball.curve = curveStrength * (FIELD_W*0.0015 + FIELD_W*0.0038*shotPower);
+    ball.curveDir = curveDir;
+    ball.curveUsed = true;
+    curveWasUsedThisShot = true;
+  } else {
+    ball.curve = 0;
+    ball.curveDir = 0;
+    ball.curveUsed = false;
+    curveWasUsedThisShot = false;
+  }
   ball.vz = overBarNow ? FIELD_H*0.052 : (power > 1.18 ? FIELD_H*0.034 + (power-1.18)*FIELD_H*0.022 : FIELD_H*0.016 + power*FIELD_H*0.018);
   ball.speed = speed;
   updateScore();
-  keeperMoveDir = Math.random() < 0.34 ? -1 : (Math.random() > 0.67 ? 1 : 0);
+  keeper.react = 0;
+  let predX = ball.x + dx * (GOAL_Y + GOAL_H - ball.y) / dy;
+  if (curveWasUsedThisShot) {
+    predX += (Math.random() - 0.5) * GOAL_W * 0.12;
+  } else {
+    predX += (Math.random() - 0.5) * GOAL_W * 0.06;
+  }
+  predX = Math.max(keeper.leftLimit, Math.min(keeper.rightLimit, predX));
+  keeper.targetX = predX;
   keeperSave = false;
 }
 
 function update() {
   if (shooting) {
     keeperAnim++;
-    let saveTarget = keeper.x + keeperMoveDir * (GOAL_W/2 - keeper.w/1.6);
-    saveTarget = Math.max(keeper.leftLimit, Math.min(keeper.rightLimit, saveTarget));
-    if (Math.abs(saveTarget - keeper.x) > 2) {
-      keeper.x += (saveTarget - keeper.x) * 0.19;
+    const reactFrames = 7;
+    if (keeper.react < reactFrames) {
+      keeper.react++;
+    } else {
+      if (typeof keeper.targetX === "number") {
+        let saveTarget = keeper.targetX;
+        saveTarget = Math.max(keeper.leftLimit, Math.min(keeper.rightLimit, saveTarget));
+        if (Math.abs(saveTarget - keeper.x) > 2) {
+          keeper.x += (saveTarget - keeper.x) * (curveWasUsedThisShot ? 0.13 : 0.22);
+        }
+      }
     }
   }
   if (ball.moving) {
+    if (ball.curveUsed) {
+      ball.vx += (ball.curveDir * ball.curve) / 38;
+    }
     ball.x += ball.vx;
     ball.y += ball.vy;
     ball.z += ball.vz;
@@ -391,7 +463,7 @@ function update() {
 }
 
 canvas.addEventListener("mousemove", function(e){
-  if (shooting || !gameActive) return;
+  if (shooting || !gameActive || choosingCurve) return;
   let rect = canvas.getBoundingClientRect();
   let mx = e.clientX - rect.left, my = e.clientY - rect.top;
   let dx = mx - ball.x, dy = my - ball.y;
@@ -409,11 +481,12 @@ canvas.addEventListener("mousemove", function(e){
 });
 
 function startCharge(e) {
-  if (shooting || !gameActive) return;
+  if (shooting || !gameActive || choosingCurve) return;
   if (!chargingPower) {
     chargingPower = true;
     chargeStart = performance.now();
     chargeTime = 0;
+    canChooseCurve = true;
   }
 }
 
@@ -424,7 +497,75 @@ function endCharge(e) {
   let capped = Math.min(chargeTime, maxCharge);
   let isOver = capped > 1.5;
   let finalPower = 0.6 + capped * 0.58;
-  shootBall(lastAimX || aimTarget.x, lastAimY || aimTarget.y, finalPower, isOver);
+  if (curveMode) {
+    chooseCurve();
+  } else {
+    shootBall(lastAimX || aimTarget.x, lastAimY || aimTarget.y, finalPower, isOver);
+  }
+}
+
+function chooseCurve() {
+  if (!canChooseCurve || choosingCurve) return;
+  choosingCurve = true;
+  curveSet = false;
+  curveDir = 0;
+  curveStrength = 0;
+  curveCharge = 0;
+  curveStart = performance.now();
+  curveTip.style.display = "block";
+  let keydownLeft = false;
+  let keydownRight = false;
+  let lastDir = 0;
+  function curveStep() {
+    if (!choosingCurve) return;
+    curveCharge = (performance.now() - curveStart)/1000;
+    if (keydownLeft) {
+      curveDir = -1;
+      curveStrength = Math.min(curveCharge/1.1, 1);
+    } else if (keydownRight) {
+      curveDir = 1;
+      curveStrength = Math.min(curveCharge/1.1, 1);
+    } else {
+      curveDir = 0;
+      curveStrength = 0;
+    }
+    animFrame = requestAnimationFrame(curveStep);
+  }
+  function keydownHandler(ev) {
+    if (ev.code === "ArrowLeft") {
+      keydownLeft = true;
+      lastDir = -1;
+    }
+    if (ev.code === "ArrowRight") {
+      keydownRight = true;
+      lastDir = 1;
+    }
+  }
+  function keyupHandler(ev) {
+    if (ev.code === "ArrowLeft") keydownLeft = false;
+    if (ev.code === "ArrowRight") keydownRight = false;
+    if (ev.code === "Enter" || ev.code === "Space") {
+      finishCurve();
+    }
+  }
+  function mouseupHandler(ev) { finishCurve(); }
+  function finishCurve() {
+    choosingCurve = false;
+    curveSet = true;
+    if (curveDir === 0) curveStrength = 0;
+    document.removeEventListener("keydown", keydownHandler);
+    document.removeEventListener("keyup", keyupHandler);
+    document.removeEventListener("mouseup", mouseupHandler);
+    curveTip.style.display = "none";
+    let capped = Math.min(chargeTime, maxCharge);
+    let isOver = capped > 1.5;
+    let finalPower = 0.6 + capped * 0.58;
+    shootBall(lastAimX || aimTarget.x, lastAimY || aimTarget.y, finalPower, isOver);
+  }
+  document.addEventListener("keydown", keydownHandler);
+  document.addEventListener("keyup", keyupHandler);
+  document.addEventListener("mouseup", mouseupHandler);
+  curveStep();
 }
 
 canvas.addEventListener("mousedown", startCharge);
@@ -433,6 +574,10 @@ canvas.addEventListener("mouseleave", e => { if (chargingPower) endCharge(); });
 
 window.addEventListener("keydown", function(e){
   if (e.code === "Space") startCharge();
+  if (e.code === "KeyC" && !curveMode && !shooting && !aimSet && !chargingPower && canChooseCurve) {
+    curveMode = true;
+    curveTip.style.display = "block";
+  }
 });
 window.addEventListener("keyup", function(e){
   if (e.code === "Space") endCharge();
