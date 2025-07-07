@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Fun Football Game</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    html, body {
+      width: 100vw;
+      height: 100vh;
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      background: #000;
+    }
+    body { position: relative; }
+    canvas {
+      display: block;
+      margin: 0 auto;
+      background: #000;
+      border-radius: 20px;
+      position: absolute;
+      left: 0; right: 0; top: 0; bottom: 0;
+    }
+    #scoreInfo {
+      position: absolute;
+      left: 32px;
+      top: 16px;
+      color: #0ff;
+      font-size: 1.15em;
+      z-index: 2;
+      font-family: monospace;
+      background: #000a;
+      padding: 8px 20px;
+      border-radius: 8px;
+      border: 2px solid #0ff;
+    }
+    #restartBtn {
+      position: absolute;
+      right: 32px;
+      top: 16px;
+      background: #00ffe5;
+      color: #000;
+      border: none;
+      border-radius: 8px;
+      padding: 8px 16px;
+      font-size: 1.1em;
+      font-weight: bold;
+      cursor: pointer;
+      z-index: 2;
+      transition: background 0.2s;
+    }
+    #restartBtn:hover { background: #0ff; }
+    h2 {
+      color: #0ff;
+      text-align: center;
+      margin-top: 22px;
+      margin-bottom: 0;
+      font-family: monospace;
+      font-size: 2em;
+      letter-spacing: 1px;
+      text-shadow: 0 0 18px #0ff9;
+    }
+  </style>
+</head>
+<body>
+  <h2>Fun Football Game</h2>
+  <div id="scoreInfo">Goals: 0 &nbsp; | &nbsp; Shots: 0</div>
+  <button id="restartBtn" onclick="resetGame()">Restart</button>
+  <canvas id="game"></canvas>
+  <script>
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+const scoreInfo = document.getElementById("scoreInfo");
+
+let W = window.innerWidth;
+let H = window.innerHeight;
+let FIELD_W, FIELD_H, FIELD_X, FIELD_Y;
+let GOAL_W, GOAL_H, GOAL_X, GOAL_Y;
+let BALL_RADIUS, PEN_SPOT_X, PEN_SPOT_Y, BOX_W, BOX_H, BOX_X, BOX_Y, MARK_DIST;
+let ball, shooting = false, shotCount = 0, goals = 0, resultMsg = "";
+let keeper, keeperMoveDir = 0, keeperAnim = 0, keeperSave = false, gameActive = true;
+let aiming = false, aimAngle = 0, aimPower = 0.6, aimTarget = {x:0,y:0}, aimSet = false;
+let animFrame;
+
+function resize() {
+  W = window.innerWidth;
+  H = window.innerHeight;
+  canvas.width = W;
+  canvas.height = H;
+  FIELD_W = Math.min(W*0.7, H*0.75, 750);
+  FIELD_H = FIELD_W * 1.2;
+  FIELD_X = (W - FIELD_W) / 2;
+  FIELD_Y = (H - FIELD_H) / 2;
+  GOAL_W = FIELD_W * 0.6;
+  GOAL_H = FIELD_H * 0.08;
+  GOAL_X = FIELD_X + (FIELD_W - GOAL_W) / 2;
+  GOAL_Y = FIELD_Y + 48;
+  BOX_W = FIELD_W * 0.85;
+  BOX_H = FIELD_H * 0.33;
+  BOX_X = FIELD_X + (FIELD_W - BOX_W) / 2;
+  BOX_Y = GOAL_Y;
+  BALL_RADIUS = FIELD_W * 0.03;
+  PEN_SPOT_X = FIELD_X + FIELD_W/2;
+  PEN_SPOT_Y = FIELD_Y + FIELD_H * 0.83;
+  MARK_DIST = FIELD_H * 0.11;
+  resetGame(true);
+}
+window.addEventListener("resize", resize);
+
+function resetGame(keepScore=false) {
+  if (!keepScore) { goals=0; shotCount=0; }
+  resultMsg = "";
+  ball = {
+    x: PEN_SPOT_X,
+    y: PEN_SPOT_Y,
+    vx: 0,
+    vy: 0,
+    speed: 0,
+    moving: false,
+    scored: false
+  };
+  shooting = false;
+  aiming = false;
+  aimAngle = -Math.PI/2;
+  aimPower = 0.6;
+  aimSet = false;
+  aimTarget = {x: PEN_SPOT_X, y: GOAL_Y + GOAL_H/2};
+  keeper = {
+    x: FIELD_X + FIELD_W/2,
+    y: GOAL_Y + GOAL_H + BALL_RADIUS*1.1,
+    w: GOAL_W/5,
+    h: BALL_RADIUS*2.1,
+    moveX: 0,
+    saveX: 0
+  };
+  keeperAnim = 0;
+  keeperMoveDir = 0;
+  keeperSave = false;
+  gameActive = true;
+  updateScore();
+  cancelAnimationFrame(animFrame);
+  draw();
+}
+
+function updateScore() {
+  scoreInfo.textContent = `Goals: ${goals}  |  Shots: ${shotCount}`;
+}
+
+function drawField() {
+  ctx.save();
+  ctx.fillStyle="#000";
+  ctx.fillRect(0,0,W,H);
+  ctx.strokeStyle="#0ff";
+  ctx.lineWidth = 8;
+  ctx.strokeRect(FIELD_X-2, FIELD_Y-2, FIELD_W+4, FIELD_H+4);
+  ctx.fillStyle="#09d950";
+  ctx.fillRect(FIELD_X, FIELD_Y, FIELD_W, FIELD_H);
+  ctx.save();
+  ctx.strokeStyle="#fff";
+  ctx.lineWidth=4;
+  ctx.strokeRect(BOX_X, BOX_Y, BOX_W, BOX_H);
+  ctx.restore();
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(PEN_SPOT_X, GOAL_Y + BOX_H, MARK_DIST, Math.PI*0.14, Math.PI*0.86, false);
+  ctx.strokeStyle="#fff";
+  ctx.lineWidth=4;
+  ctx.stroke();
+  ctx.restore();
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(PEN_SPOT_X, PEN_SPOT_Y, BALL_RADIUS/3, 0, Math.PI*2);
+  ctx.fillStyle="#fff";
+  ctx.fill();
+  ctx.restore();
+  ctx.save();
+  ctx.strokeStyle="#fff";
+  ctx.lineWidth=6;
+  ctx.beginPath();
+  ctx.moveTo(GOAL_X, GOAL_Y+GOAL_H);
+  ctx.lineTo(GOAL_X+GOAL_W, GOAL_Y+GOAL_H);
+  ctx.stroke();
+  ctx.restore();
+  ctx.save();
+  ctx.strokeStyle="#fff";
+  ctx.lineWidth=12;
+  ctx.lineCap="round";
+  ctx.beginPath();
+  ctx.moveTo(GOAL_X, GOAL_Y+GOAL_H);
+  ctx.lineTo(GOAL_X, GOAL_Y);
+  ctx.lineTo(GOAL_X+GOAL_W, GOAL_Y);
+  ctx.lineTo(GOAL_X+GOAL_W, GOAL_Y+GOAL_H);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawKeeper() {
+  ctx.save();
+  ctx.translate(keeper.x, keeper.y);
+  ctx.save();
+  ctx.strokeStyle = "#0ff";
+  ctx.lineWidth = BALL_RADIUS*0.6;
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  ctx.moveTo(-keeper.w*0.7, 0);
+  ctx.lineTo(keeper.w*0.7, 0);
+  ctx.stroke();
+  ctx.restore();
+  ctx.beginPath();
+  ctx.arc(0, 0, keeper.h*0.63, 0, Math.PI*2);
+  ctx.fillStyle = "#fff";
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(0, -keeper.h*0.83, keeper.h*0.5, 0, Math.PI*2);
+  ctx.fillStyle = "#0ff";
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawBall() {
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(ball.x, ball.y, BALL_RADIUS, 0, Math.PI*2);
+  ctx.fillStyle = "#fff";
+  ctx.shadowColor = "#0ff";
+  ctx.shadowBlur = 12;
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawAim() {
+  if (shooting || aimSet || !gameActive) return;
+  ctx.save();
+  ctx.strokeStyle="#0ff";
+  ctx.setLineDash([10,8]);
+  ctx.lineWidth = 4;
+  ctx.beginPath();
+  ctx.moveTo(ball.x, ball.y);
+  const aimX = ball.x + Math.cos(aimAngle) * FIELD_H*0.42 * aimPower;
+  const aimY = ball.y + Math.sin(aimAngle) * FIELD_H*0.42 * aimPower;
+  ctx.lineTo(aimX, aimY);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.restore();
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(aimX, aimY, BALL_RADIUS*0.6, 0, Math.PI*2);
+  ctx.strokeStyle = "#0ff";
+  ctx.lineWidth = 3;
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawMsg() {
+  if (resultMsg) {
+    ctx.save();
+    ctx.font = `bold ${Math.max(36,W*0.03)}px Segoe UI`;
+    ctx.textAlign="center";
+    ctx.fillStyle = "#fff";
+    ctx.shadowColor="#0ff";
+    ctx.shadowBlur=12;
+    ctx.fillText(resultMsg, W/2, FIELD_Y+FIELD_H*0.18);
+    ctx.restore();
+  }
+}
+
+function draw() {
+  drawField();
+  drawKeeper();
+  drawBall();
+  drawAim();
+  drawMsg();
+  if (ball.moving || shooting) update();
+  animFrame = requestAnimationFrame(draw);
+}
+
+function shootBall(targetX, targetY) {
+  if (!gameActive || shooting) return;
+  shooting = true;
+  aimSet = true;
+  ball.moving = true;
+  ball.scored = false;
+  let dx = targetX - ball.x;
+  let dy = targetY - ball.y;
+  let dist = Math.sqrt(dx*dx + dy*dy);
+  let speed = Math.max(FIELD_H*0.023, Math.min(FIELD_H*0.034, dist*0.07));
+  ball.vx = dx/dist * speed;
+  ball.vy = dy/dist * speed;
+  ball.speed = speed;
+  shotCount++;
+  updateScore();
+  keeperMoveDir = Math.random() < 0.34 ? -1 : (Math.random() > 0.67 ? 1 : 0);
+  keeperSave = false;
+}
+
+function update() {
+  if (shooting) {
+    keeperAnim++;
+    let saveTarget = keeper.x + keeperMoveDir * (GOAL_W/2 - keeper.w/1.6);
+    if (Math.abs(saveTarget - keeper.x) > 2) {
+      keeper.x += (saveTarget - keeper.x) * 0.19;
+    }
+  }
+  if (ball.moving) {
+    ball.x += ball.vx;
+    ball.y += ball.vy;
+    if (!keeperSave && 
+        ball.y < keeper.y + keeper.h*0.8 &&
+        ball.y > keeper.y - keeper.h*0.8 &&
+        Math.abs(ball.x - keeper.x) < keeper.w*0.52 + BALL_RADIUS &&
+        ball.y < GOAL_Y + GOAL_H + BALL_RADIUS*1.1) {
+      ball.moving = false;
+      resultMsg = "SAVED!";
+      keeperSave = true;
+      shooting = false;
+      setTimeout(() => {resultMsg="";resetGame(true);}, 1350);
+      return;
+    }
+    if (
+      ball.y < GOAL_Y + GOAL_H + BALL_RADIUS*1.2 &&
+      ball.x > GOAL_X + BALL_RADIUS*0.6 && ball.x < GOAL_X+GOAL_W - BALL_RADIUS*0.6 &&
+      ball.y > GOAL_Y - BALL_RADIUS*2
+    ) {
+      ball.moving = false;
+      resultMsg = "GOAL!";
+      goals++;
+      updateScore();
+      shooting = false;
+      setTimeout(() => {resultMsg="";resetGame(true);}, 1350);
+      return;
+    }
+    if (ball.x < FIELD_X - 12 || ball.x > FIELD_X+FIELD_W+12 || ball.y < FIELD_Y - 12) {
+      ball.moving = false;
+      resultMsg = "MISSED!";
+      shooting = false;
+      setTimeout(() => {resultMsg="";resetGame(true);}, 1350);
+      return;
+    }
+  }
+}
+
+canvas.addEventListener("mousemove", function(e){
+  if (shooting || !gameActive) return;
+  let rect = canvas.getBoundingClientRect();
+  let mx = e.clientX - rect.left, my = e.clientY - rect.top;
+  let dx = mx - ball.x, dy = my - ball.y;
+  if (dy < 0) {
+    aimAngle = Math.atan2(dy, dx);
+    let minY = GOAL_Y + GOAL_H*0.74;
+    let maxY = ball.y - BALL_RADIUS*2;
+    let aimY = Math.max(minY, Math.min(my, maxY));
+    let aimDist = Math.sqrt(dx*dx + (aimY-ball.y)*(aimY-ball.y));
+    aimPower = Math.max(0.46, Math.min(aimDist/(FIELD_H*0.42), 1));
+    aimTarget = {x: ball.x + Math.cos(aimAngle)*FIELD_H*0.42*aimPower, y: ball.y + Math.sin(aimAngle)*FIELD_H*0.42*aimPower};
+  }
+});
+
+canvas.addEventListener("mousedown", function(e){
+  if (shooting || !gameActive) return;
+  aimSet = true;
+  shooting = false;
+  shootBall(aimTarget.x, aimTarget.y);
+});
+
+canvas.addEventListener("touchstart", function(e){
+  if (shooting || !gameActive) return;
+  let touch = e.touches[0];
+  let rect = canvas.getBoundingClientRect();
+  let mx = touch.clientX - rect.left, my = touch.clientY - rect.top;
+  let dx = mx - ball.x, dy = my - ball.y;
+  if (dy < 0) {
+    aimAngle = Math.atan2(dy, dx);
+    let minY = GOAL_Y + GOAL_H*0.7;
+    let maxY = ball.y - BALL_RADIUS*2;
+    let aimY = Math.max(minY, Math.min(my, maxY));
+    let aimDist = Math.sqrt(dx*dx + (aimY-ball.y)*(aimY-ball.y));
+    aimPower = Math.max(0.46, Math.min(aimDist/(FIELD_H*0.42), 1));
+    aimTarget = {x: ball.x + Math.cos(aimAngle)*FIELD_H*0.42*aimPower, y: ball.y + Math.sin(aimAngle)*FIELD_H*0.42*aimPower};
+    aimSet = true;
+    shooting = false;
+    shootBall(aimTarget.x, aimTarget.y);
+  }
+});
+
+document.getElementById('restartBtn').onclick = ()=>resetGame(false);
+
+resize();
+
+  </script>
+</body>
+</html>
